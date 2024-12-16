@@ -1,8 +1,11 @@
 import { useState } from "react";
 import server from "./server";
+import { secp256k1 } from "ethereum-cryptography/secp256k1";
+import { utf8ToBytes, toHex } from "ethereum-cryptography/utils";
+import { keccak256 } from "ethereum-cryptography/keccak";
 
-function Transfer({ address, setBalance }) {
-  const [sendAmount, setSendAmount] = useState("");
+function Transfer({ address, setBalance, privateKey, publicKey }) {
+  const [sendAmount, setSendAmount] = useState(0);
   const [recipient, setRecipient] = useState("");
 
   const setValue = (setter) => (evt) => setter(evt.target.value);
@@ -10,17 +13,35 @@ function Transfer({ address, setBalance }) {
   async function transfer(evt) {
     evt.preventDefault();
 
-    try {
-      const {
-        data: { balance },
-      } = await server.post(`send`, {
-        sender: address,
-        amount: parseInt(sendAmount),
+    if(!privateKey) {
+      alert("You need to generate a wallet first!");
+      return;
+    }
+
+    if(confirm("Are you sure you want to send this transaction?")) {
+      const body = {
+        amount: sendAmount,
         recipient,
-      });
-      setBalance(balance);
-    } catch (ex) {
-      alert(ex.response.data.message);
+      };
+      const msgHash = toHex(keccak256(utf8ToBytes(JSON.stringify(body))));
+      const signature = secp256k1.sign(msgHash, privateKey);
+      const pub = signature.recoverPublicKey(msgHash).toHex();
+
+      try {
+        const response = await server.post(`send`, {
+          ...body,
+          signature: JSON.parse(JSON.stringify(signature, (key, value) => typeof value === 'bigint' ? value.toString() : value)),
+          msgHash,
+          pub
+        });
+        console.log(response.data);
+        setBalance(response.data.balance); // Update balance if the transaction succeeds
+      } catch (ex) {
+        // Handle the case where `ex.response` or `ex.response.data` is undefined
+        const errorMessage = ex.response?.data?.message || "An unexpected error occurred.";
+        console.error("Transaction failed:", ex.message);
+        alert(errorMessage); // Show a user-friendly error message
+      }
     }
   }
 
